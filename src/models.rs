@@ -48,11 +48,6 @@ pub struct CommonHeader {
 
 impl CommonHeader {
     pub fn new<T: io::Read>(input: &mut T) -> Result<CommonHeader, Error> {
-        // Read the 12 byte header at once and construct a BufReader on top of it
-        let mut buffer = [0; 12];
-        input.read(&mut buffer)?;
-        let mut input = io::BufReader::new(buffer.as_ref());
-
         let timestamp = input.read_u32::<BigEndian>()?;
         let entry_type = input.read_u16::<BigEndian>()?;
         let entry_type = match EntryType::from_u16(entry_type) {

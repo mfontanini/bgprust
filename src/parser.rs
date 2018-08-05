@@ -2,6 +2,7 @@ use std::convert;
 use std::error;
 use std::fmt;
 use std::fs::File;
+use std::mem;
 use std::io;
 use std::io::Read;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -109,9 +110,8 @@ impl<R: io::Read + ?Sized> ReadUtils for R {}
 // Parser 
 
 pub struct Parser {
-    input: Input,
+    input: Option<io::BufReader<Input>>,
     mrt_parser: MrtParser,
-    read_buffer: [u8; 65536],
 }
 
 impl Parser {
@@ -127,30 +127,33 @@ impl Parser {
         };
         Ok(
             Parser{
-                input: input,
+                input: Some(io::BufReader::new(input)),
                 mrt_parser: MrtParser::new(),
-                read_buffer: [0; 65536]
             }
         )
     }
 
     pub fn next(&mut self) -> Result<Option<Entry>, Error> {
-        let header = CommonHeader::new(&mut self.input)?;
-        let length = header.length as usize;
-        self.input.read(&mut self.read_buffer[0..length])?;
+        let header = CommonHeader::new(self.input.as_mut().unwrap())?;
 
-        let mut body_input = io::BufReader::new(&self.read_buffer[0..length]);
-        match header.entry_type {
+        let mut input = mem::replace(&mut self.input, None).unwrap();
+        let mut body_input = input.take(header.length as u64);
+        let output = match header.entry_type {
             EntryType::TableDump => {
                 self.mrt_parser.next(header, &mut body_input)
             }
-            _ => Ok(None)
-        }
+            _ => {
+                Ok(None)
+            }
+        };
+        // Restore the input
+        self.input = Some(body_input.into_inner());
+        output
     }
 }
 
 // Subtype
-#[derive(Primitive)]
+#[derive(Primitive, Debug)]
 pub enum TableDumpSubtype {
     // IPv4
     Ipv4 = 1,
@@ -235,6 +238,7 @@ impl MrtParser {
                 },
                 _ => input.read_u8().map(|x| x as u64)
             }?;
+            // Pull the attribute's bytes and process them
             let mut attr_input = input.take(length);
             let attr = self.parse_attribute(attr_type, header, &sub_type, &mut attr_input)?;
             match attr {
@@ -244,7 +248,11 @@ impl MrtParser {
                 },
                 // If we don't know how to parse it, discard it
                 None => {
-                    attr_input.read(&mut self.read_buffer[0..length as usize])?;
+                    // Make sure to read all of the data we need
+                    let mut length = length as usize;
+                    while length > 0 {
+                        length -= attr_input.read(&mut self.read_buffer[0..length])?;
+                    }
                 }
             }
             // Restore the wrapped buffer
