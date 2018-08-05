@@ -79,7 +79,7 @@ pub trait ReadUtils: io::Read {
         let mask = self.read_u8()?;
         match Ipv4Network::new(addr, mask) {
             Ok(n) => Ok(n),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, "Invalid prefix mask"))
+            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Invalid prefix mask"))
         }
     }
 
@@ -88,7 +88,7 @@ pub trait ReadUtils: io::Read {
         let mask = self.read_u8()?;
         match Ipv6Network::new(addr, mask) {
             Ok(n) => Ok(n),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, "Invalid prefix mask"))
+            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Invalid prefix mask"))
         }
     }
 
@@ -136,7 +136,7 @@ impl Parser {
     pub fn next(&mut self) -> Result<Option<Entry>, Error> {
         let header = CommonHeader::new(self.input.as_mut().unwrap())?;
 
-        let mut input = mem::replace(&mut self.input, None).unwrap();
+        let input = mem::replace(&mut self.input, None).unwrap();
         let mut body_input = input.take(header.length as u64);
         let output = match header.entry_type {
             EntryType::TableDump => {
@@ -169,13 +169,6 @@ pub enum TableDumpSubtype {
 
 pub struct MrtParser {
     read_buffer: [u8; 65536]
-}
-
-fn is_eof<R>(result: &Result<R, io::Error>) -> bool {
-    match result {
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => true,
-        _ => false
-    }
 }
 
 impl MrtParser {
@@ -225,12 +218,8 @@ impl MrtParser {
         // We only want to read at most `count` bytes
         let mut input = input.take(count as u64);
         let mut output = Vec::new();
-        loop {
-            let flag = input.read_u8();
-            if is_eof(&flag) {
-                break;
-            }
-            let flag = flag?;
+        while input.limit() > 0 {
+            let flag = input.read_u8()?;
             let attr_type = input.read_u8()?;
             let length = match flag & MrtParser::ATTRIBUTE_EXTENDED_LENGTH {
                 MrtParser::ATTRIBUTE_EXTENDED_LENGTH => {
@@ -261,9 +250,10 @@ impl MrtParser {
         Ok(output)
     }
 
-    fn parse_attribute<T: io::Read>(&self, flag: u8, header: &CommonHeader,
+    fn parse_attribute<T: io::Read>(&self, flag: u8, _header: &CommonHeader,
                                     sub_type: &TableDumpSubtype,
-                                    input: &mut T) -> Result<Option<Attribute>, Error> {
+                                    input: &mut io::Take<T>) -> Result<Option<Attribute>, Error>
+    {
         match flag {
             MrtParser::ATTRIBUTE_AS_PATH => self.parse_as_path(sub_type, input).map(Some),
             _ => Ok(None)
@@ -271,46 +261,39 @@ impl MrtParser {
     }
 
     fn parse_as_path<T: io::Read>(&self, sub_type: &TableDumpSubtype,
-                                  input: &mut T) -> Result<Attribute, Error> {
+                                  input: &mut io::Take<T>) -> Result<Attribute, Error> {
         let mut output = AsPath::new();
-        loop {
+        while input.limit() > 0 {
             let segment = self.parse_as_segment(sub_type, input)?;
-            match segment {
-                Some(segment) => output.add_segment(segment),
-                None => break Ok(Attribute::AsPath(output))
-            }
+            output.add_segment(segment);
         }
+        Ok(Attribute::AsPath(output))
     }
 
     fn parse_as_segment<T: io::Read>(&self, sub_type: &TableDumpSubtype,
-                                     input: &mut T)-> Result<Option<AsPathSegment>, Error> {
-        let segment_type = input.read_u8();
-        if let Err(e) = segment_type {
-            Ok(None)
-        }
-        else {
-            let segment_type = segment_type.unwrap();
-            let count = input.read_u8()?;
-            let mut path = Vec::with_capacity(count as usize);
-            match sub_type {
-                TableDumpSubtype::Ipv4As4 | TableDumpSubtype::Ipv6As4 => {
-                    for i in 0..count {
-                        path.push(input.read_u32::<BigEndian>()?);
-                    }
-                },
-                TableDumpSubtype::Ipv4 | TableDumpSubtype::Ipv6 => {
-                    for i in 0..count {
-                        path.push(input.read_u16::<BigEndian>().map(|i| i as u32)?);
-                    }
+                                     input: &mut io::Take<T>) -> Result<AsPathSegment, Error>
+    {
+        let segment_type = input.read_u8()?;
+        let count = input.read_u8()?;
+        let mut path = Vec::with_capacity(count as usize);
+        match sub_type {
+            TableDumpSubtype::Ipv4As4 | TableDumpSubtype::Ipv6As4 => {
+                for _ in 0..count {
+                    path.push(input.read_u32::<BigEndian>()?);
+                }
+            },
+            TableDumpSubtype::Ipv4 | TableDumpSubtype::Ipv6 => {
+                for _ in 0..count {
+                    path.push(input.read_u16::<BigEndian>().map(|i| i as u32)?);
                 }
             }
-            match segment_type {
-                MrtParser::AS_PATH_AS_SET => Ok(Some(AsPathSegment::AsSet(path))),
-                MrtParser::AS_PATH_AS_SEQUENCE => Ok(Some(AsPathSegment::AsSequence(path))),
-                MrtParser::AS_PATH_CONFED_SEQUENCE => Ok(Some(AsPathSegment::ConfedSequence(path))),
-                MrtParser::AS_PATH_CONFED_SET => Ok(Some(AsPathSegment::ConfedSet(path))),
-                _ => Err(Error::ParseError("Invalid AS path segment type".to_string()))
-            }
+        }
+        match segment_type {
+            MrtParser::AS_PATH_AS_SET => Ok(AsPathSegment::AsSet(path)),
+            MrtParser::AS_PATH_AS_SEQUENCE => Ok(AsPathSegment::AsSequence(path)),
+            MrtParser::AS_PATH_CONFED_SEQUENCE => Ok(AsPathSegment::ConfedSequence(path)),
+            MrtParser::AS_PATH_CONFED_SET => Ok(AsPathSegment::ConfedSet(path)),
+            _ => Err(Error::ParseError("Invalid AS path segment type".to_string()))
         }
     }
 }
@@ -321,10 +304,11 @@ mod tests {
 
     #[test]
     fn parse_as_path_as16() {
-        let mut parser = MrtParser::new();
+        let parser = MrtParser::new();
         let buf = "\x02\x03\x00\x01\x00\x02\x00\x03\x01\x02\x00\x04\x00\x05".as_bytes();
-        let mut reader = io::BufReader::new(buf);
-        let result = parser.parse_as_path(&TableDumpSubtype::Ipv4, &mut reader);
+        let reader = io::BufReader::new(buf);
+        let result = parser.parse_as_path(&TableDumpSubtype::Ipv4,
+                                          &mut reader.take(buf.len() as u64));
         assert_eq!(
             result.unwrap(),
             Attribute::AsPath(
@@ -340,10 +324,11 @@ mod tests {
 
     #[test]
     fn parse_as_path_as32() {
-        let mut parser = MrtParser::new();
+        let parser = MrtParser::new();
         let buf = "\x02\x03\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03".as_bytes();
-        let mut reader = io::BufReader::new(buf);
-        let result = parser.parse_as_path(&TableDumpSubtype::Ipv4As4, &mut reader);
+        let reader = io::BufReader::new(buf);
+        let result = parser.parse_as_path(&TableDumpSubtype::Ipv4As4,
+                                          &mut reader.take(buf.len() as u64));
         assert_eq!(
             result.unwrap(),
             Attribute::AsPath(
