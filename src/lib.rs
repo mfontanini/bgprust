@@ -1,5 +1,4 @@
 extern crate ipnetwork;
-extern crate bzip2;
 extern crate byteorder;
 #[macro_use] extern crate enum_primitive_derive;
 extern crate num_traits;

@@ -1,15 +1,12 @@
 use std::convert;
 use std::error;
 use std::fmt;
-use std::fs::File;
 use std::mem;
 use std::io;
 use std::io::Read;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use byteorder::{BigEndian, ReadBytesExt};
-
-use bzip2::read::BzDecoder;
 
 use ipnetwork::{Ipv4Network, Ipv6Network};
 
@@ -42,22 +39,6 @@ impl fmt::Display for Error {
 impl convert::From<io::Error> for Error {
     fn from(io_error: io::Error) -> Self {
         Error::Io(io_error)
-    }
-}
-
-// Input 
-
-enum Input {
-    Bzip(BzDecoder<File>),
-    File(File)
-}
-
-impl io::Read for Input {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Input::Bzip(ref mut stream) => stream.read(buf),
-            Input::File(ref mut stream) => stream.read(buf),
-        }
     }
 }
 
@@ -109,28 +90,17 @@ impl<R: io::Read + ?Sized> ReadUtils for R {}
 
 // Parser 
 
-pub struct Parser {
-    input: Option<io::BufReader<Input>>,
+pub struct Parser<T: io::Read> {
+    input: Option<io::BufReader<T>>,
     mrt_parser: MrtParser,
 }
 
-impl Parser {
-    pub fn new(path: &str) -> io::Result<Parser> {
-        let file = File::open(path)?;
-        let input = {
-            if path.ends_with(".bz2") {
-                Input::Bzip(BzDecoder::new(file))
-            }
-            else {
-                Input::File(file)
-            }
-        };
-        Ok(
-            Parser{
-                input: Some(io::BufReader::new(input)),
-                mrt_parser: MrtParser::new(),
-            }
-        )
+impl<T: io::Read> Parser<T> {
+    pub fn new(input: T) -> Parser<T> {
+        Parser{
+            input: Some(io::BufReader::new(input)),
+            mrt_parser: MrtParser::new(),
+        }
     }
 
     pub fn next(&mut self) -> Result<Option<Entry>, Error> {

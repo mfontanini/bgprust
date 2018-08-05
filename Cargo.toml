@@ -6,6 +6,5 @@ authors = ["Matias Fontanini <matias.fontanini@gmail.com>"]
 [dependencies]
 byteorder = "1.2"
 ipnetwork = "0.13"
-bzip2 = "0.3"
 enum-primitive-derive = "0.1"
 num-traits = "0.1"
