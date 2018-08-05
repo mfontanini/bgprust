@@ -123,14 +123,13 @@ impl MrtParser {
         }
     }
 
-    pub fn next<T>(&mut self, header: CommonHeader,
-                   input: &mut T) -> Result<Option<Entry>, Error>
+    pub fn next<T>(&self, header: CommonHeader, input: &mut T) -> Result<Option<Entry>, Error>
         where T: io::BufRead
     {
         self.parse_table_dump(header, input)
     }
 
-    fn parse_table_dump<T>(&mut self, header: CommonHeader,
+    fn parse_table_dump<T>(&self, header: CommonHeader,
                            input: &mut T) -> Result<Option<Entry>, Error>
         where T: io::BufRead
     {
@@ -139,7 +138,8 @@ impl MrtParser {
             None => Err(Error::ParseError("Invalid subtype found".to_string()))
         }?;
         let table_dump_header = TableDumpHeader::new(&sub_type, input)?;
-        let attributes = self.process_attributes(&header, sub_type, input)?;
+        let attribute_parser = AttributeParser::new();
+        let attributes = attribute_parser.process_attributes(&header, sub_type, input)?;
         Ok(
             Some(
                 Entry {
@@ -150,8 +150,18 @@ impl MrtParser {
             )
         )
     }
+}
 
-    fn process_attributes<T>(&mut self, header: &CommonHeader, sub_type: TableDumpSubtype,
+struct AttributeParser {
+
+}
+
+impl AttributeParser {
+    fn new() -> AttributeParser {
+        AttributeParser { }
+    }
+
+    fn process_attributes<T>(&self, header: &CommonHeader, sub_type: TableDumpSubtype,
                              input: &mut T) -> Result<Vec<Attribute>, Error>
         where T: io::BufRead
     {
@@ -261,7 +271,7 @@ mod tests {
 
     #[test]
     fn parse_as_path_as16() {
-        let parser = MrtParser::new();
+        let parser = AttributeParser::new();
         let buf = "\x02\x03\x00\x01\x00\x02\x00\x03\x01\x02\x00\x04\x00\x05".as_bytes();
         let reader = io::BufReader::new(buf);
         let result = parser.parse_as_path(&TableDumpSubtype::Ipv4,
@@ -281,7 +291,7 @@ mod tests {
 
     #[test]
     fn parse_as_path_as32() {
-        let parser = MrtParser::new();
+        let parser = AttributeParser::new();
         let buf = "\x02\x03\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03".as_bytes();
         let reader = io::BufReader::new(buf);
         let result = parser.parse_as_path(&TableDumpSubtype::Ipv4As4,
