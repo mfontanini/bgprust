@@ -1,9 +1,7 @@
-use std::convert;
-use std::error;
-use std::fmt;
 use std::mem;
 use std::io;
 use std::io::Read;
+use std::io::BufRead;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use byteorder::{BigEndian, ReadBytesExt};
@@ -13,34 +11,6 @@ use ipnetwork::{Ipv4Network, Ipv6Network};
 use num_traits::FromPrimitive;
 
 use models::*;
-
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            Error::Io(e) => e.description(),
-            Error::ParseError(s) => &s
-        }
-    }
-
-    fn cause(&self) -> Option<&error::Error> {
-        match self {
-            Error::Io(ref e) => Some(e),
-            _ => None
-        }
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Error: ")
-    }
-}
-
-impl convert::From<io::Error> for Error {
-    fn from(io_error: io::Error) -> Self {
-        Error::Io(io_error)
-    }
-}
 
 // Allow reading IPs from Reads
 pub trait ReadUtils: io::Read {
@@ -73,7 +43,7 @@ pub trait ReadUtils: io::Read {
         }
     }
 
-    fn read_asn(&mut self, subtype: &TableDumpSubtype) -> io::Result<u32> {
+    fn read_asn(&mut self, subtype: &TableDumpSubtype) -> io::Result<Asn> {
         match subtype {
             TableDumpSubtype::Ipv4 | TableDumpSubtype::Ipv6 => {
                 Ok(self.read_u16::<BigEndian>()? as u32)
@@ -92,14 +62,12 @@ impl<R: io::Read + ?Sized> ReadUtils for R {}
 
 pub struct Parser<T: io::Read> {
     input: Option<io::BufReader<T>>,
-    mrt_parser: MrtParser,
 }
 
 impl<T: io::Read> Parser<T> {
     pub fn new(input: T) -> Parser<T> {
         Parser{
             input: Some(io::BufReader::new(input)),
-            mrt_parser: MrtParser::new(),
         }
     }
 
@@ -110,7 +78,8 @@ impl<T: io::Read> Parser<T> {
         let mut body_input = input.take(header.length as u64);
         let output = match header.entry_type {
             EntryType::TableDump => {
-                self.mrt_parser.next(header, &mut body_input)
+                let mut parser = MrtParser::new();
+                parser.next(header, &mut body_input)
             }
             _ => {
                 Ok(None)
@@ -138,13 +107,10 @@ pub enum TableDumpSubtype {
 // Parser
 
 pub struct MrtParser {
-    read_buffer: [u8; 65536]
 }
 
 impl MrtParser {
     const ATTRIBUTE_EXTENDED_LENGTH: u8 = 0x10;
-    // Attribute flags
-    const ATTRIBUTE_AS_PATH: u8 = 2;
     // AS path flags
     const AS_PATH_AS_SET: u8 = 1;
     const AS_PATH_AS_SEQUENCE: u8 = 2;
@@ -153,17 +119,21 @@ impl MrtParser {
 
     pub fn new() -> MrtParser {
         MrtParser {
-            read_buffer: [0; 65536]
+
         }
     }
 
-    pub fn next<T: io::Read>(&mut self, header: CommonHeader,
-                             input: &mut T) -> Result<Option<Entry>, Error> {
+    pub fn next<T>(&mut self, header: CommonHeader,
+                   input: &mut T) -> Result<Option<Entry>, Error>
+        where T: io::BufRead
+    {
         self.parse_table_dump(header, input)
     }
 
-    fn parse_table_dump<T: io::Read>(&mut self, header: CommonHeader,
-                                     input: &mut T) -> Result<Option<Entry>, Error> {
+    fn parse_table_dump<T>(&mut self, header: CommonHeader,
+                           input: &mut T) -> Result<Option<Entry>, Error>
+        where T: io::BufRead
+    {
         let sub_type = match TableDumpSubtype::from_i16(header.entry_subtype as i16) {
             Some(t) => Ok(t),
             None => Err(Error::ParseError("Invalid subtype found".to_string()))
@@ -181,9 +151,10 @@ impl MrtParser {
         )
     }
 
-    fn process_attributes<T: io::Read>(&mut self, header: &CommonHeader,
-                                       sub_type: TableDumpSubtype,
-                                       input: &mut T) -> Result<Vec<Attribute>, Error> {
+    fn process_attributes<T>(&mut self, header: &CommonHeader, sub_type: TableDumpSubtype,
+                             input: &mut T) -> Result<Vec<Attribute>, Error>
+        where T: io::BufRead
+    {
         let count = input.read_u16::<BigEndian>()?;
         // We only want to read at most `count` bytes
         let mut input = input.take(count as u64);
@@ -207,10 +178,16 @@ impl MrtParser {
                 },
                 // If we don't know how to parse it, discard it
                 None => {
-                    // Make sure to read all of the data we need
-                    let mut length = length as usize;
+                    let buffer_length = attr_input.fill_buf()?.len() as usize;
+                    let mut length = length as usize - buffer_length;
+
+                    // For some reason, Take doesn't force the underlying BufReader/Take
+                    // to read past its buffered data. We shouldn't hit this nasty loop
+                    // very often anyway
+                    attr_input.consume(buffer_length);
                     while length > 0 {
-                        length -= attr_input.read(&mut self.read_buffer[0..length])?;
+                        attr_input.read_u8()?;
+                        length -= 1;
                     }
                 }
             }
@@ -220,18 +197,27 @@ impl MrtParser {
         Ok(output)
     }
 
-    fn parse_attribute<T: io::Read>(&self, flag: u8, _header: &CommonHeader,
-                                    sub_type: &TableDumpSubtype,
-                                    input: &mut io::Take<T>) -> Result<Option<Attribute>, Error>
+    fn parse_attribute<T>(&self, flag: u8, _header: &CommonHeader, sub_type: &TableDumpSubtype,
+                          input: &mut io::Take<T>) -> Result<Option<Attribute>, Error>
+        where T: io::BufRead
     {
         match flag {
-            MrtParser::ATTRIBUTE_AS_PATH => self.parse_as_path(sub_type, input).map(Some),
+            constants::attributes::ORIGIN =>  self.parse_origin(input).map(Some),
+            constants::attributes::AS_PATH => self.parse_as_path(sub_type, input).map(Some),
             _ => Ok(None)
         }
     }
 
-    fn parse_as_path<T: io::Read>(&self, sub_type: &TableDumpSubtype,
-                                  input: &mut io::Take<T>) -> Result<Attribute, Error> {
+    fn parse_origin<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        Ok(input.read_u8().map(|x| Attribute::Origin(x))?)
+    }
+
+    fn parse_as_path<T>(&self, sub_type: &TableDumpSubtype,
+                        input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
         let mut output = AsPath::new();
         while input.limit() > 0 {
             let segment = self.parse_as_segment(sub_type, input)?;
@@ -240,8 +226,9 @@ impl MrtParser {
         Ok(Attribute::AsPath(output))
     }
 
-    fn parse_as_segment<T: io::Read>(&self, sub_type: &TableDumpSubtype,
-                                     input: &mut io::Take<T>) -> Result<AsPathSegment, Error>
+    fn parse_as_segment<T>(&self, sub_type: &TableDumpSubtype,
+                           input: &mut io::Take<T>) -> Result<AsPathSegment, Error>
+        where T: io::BufRead
     {
         let segment_type = input.read_u8()?;
         let count = input.read_u8()?;

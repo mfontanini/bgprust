@@ -1,3 +1,6 @@
+use std::convert;
+use std::error;
+use std::fmt;
 use std::io;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -16,6 +19,36 @@ pub enum Error {
     Io(io::Error),
     ParseError(String)
 }
+
+impl error::Error for Error {
+    fn description(&self) -> &str {
+        match self {
+            Error::Io(e) => e.description(),
+            Error::ParseError(s) => &s
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        match self {
+            Error::Io(ref e) => Some(e),
+            _ => None
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Error: ")
+    }
+}
+
+impl convert::From<io::Error> for Error {
+    fn from(io_error: io::Error) -> Self {
+        Error::Io(io_error)
+    }
+}
+
+pub type Asn = u32;
 
 // The actual header Parser::next returns
 
@@ -77,7 +110,7 @@ pub struct TableDumpHeader {
     pub status: u8,
     pub originated_time: Duration,
     pub peer_address: IpAddr,
-    pub peer_asn: u32
+    pub peer_asn: Asn
 }
 
 impl TableDumpHeader {
@@ -120,19 +153,27 @@ impl TableDumpHeader {
 
 // Attributes
 
+pub mod constants {
+    pub mod attributes {
+        pub const ORIGIN:  u8 = 1;
+        pub const AS_PATH: u8 = 2;
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Attribute {
-    AsPath(AsPath)
+    Origin(u8),
+    AsPath(AsPath),
 }
 
 // AS path models
 
 #[derive(Debug, PartialEq)]
 pub enum AsPathSegment {
-    AsSequence(Vec<u32>),
-    AsSet(Vec<u32>),
-    ConfedSequence(Vec<u32>),
-    ConfedSet(Vec<u32>),
+    AsSequence(Vec<Asn>),
+    AsSet(Vec<Asn>),
+    ConfedSequence(Vec<Asn>),
+    ConfedSet(Vec<Asn>),
 }
 
 #[derive(Debug, PartialEq)]
