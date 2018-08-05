@@ -43,14 +43,10 @@ pub trait ReadUtils: io::Read {
         }
     }
 
-    fn read_asn(&mut self, subtype: &TableDumpSubtype) -> io::Result<Asn> {
-        match subtype {
-            TableDumpSubtype::Ipv4 | TableDumpSubtype::Ipv6 => {
-                Ok(self.read_u16::<BigEndian>()? as u32)
-            }
-            TableDumpSubtype::Ipv4As4 | TableDumpSubtype::Ipv6As4 => {
-                self.read_u32::<BigEndian>()
-            }
+    fn read_asn(&mut self, as_length: &AsLength) -> io::Result<Asn> {
+        match as_length {
+            AsLength::Bits16 => Ok(self.read_u16::<BigEndian>()? as u32),
+            AsLength::Bits32 => self.read_u32::<BigEndian>(),
         }
     }
 }
@@ -92,6 +88,7 @@ impl<T: io::Read> Parser<T> {
 }
 
 // Subtype
+
 #[derive(Primitive, Debug)]
 pub enum TableDumpSubtype {
     // IPv4
@@ -102,6 +99,55 @@ pub enum TableDumpSubtype {
     Ipv4As4 = 3,
     // IPv6 using 32 bit ASes
     Ipv6As4 = 4,
+}
+
+#[derive(Debug)]
+pub enum Afi {
+    Ipv4,
+    Ipv6
+}
+
+#[derive(Debug)]
+pub enum AsLength {
+    Bits16,
+    Bits32,
+}
+
+#[derive(Debug)]
+pub struct EntryMetadata {
+    pub afi: Afi,
+    pub as_length: AsLength,
+}
+
+impl EntryMetadata {
+    fn from_table_dump(entry_subtype: &TableDumpSubtype) -> EntryMetadata {
+        match entry_subtype {
+            TableDumpSubtype::Ipv4 => {
+                EntryMetadata {
+                    afi: Afi::Ipv4,
+                    as_length: AsLength::Bits16
+                }
+            },
+            TableDumpSubtype::Ipv6 => {
+                EntryMetadata {
+                    afi: Afi::Ipv6,
+                    as_length: AsLength::Bits16
+                }
+            },
+            TableDumpSubtype::Ipv4As4 => {
+                EntryMetadata {
+                    afi: Afi::Ipv4,
+                    as_length: AsLength::Bits32
+                }
+            },
+            TableDumpSubtype::Ipv6As4 => {
+                EntryMetadata {
+                    afi: Afi::Ipv6,
+                    as_length: AsLength::Bits32
+                }
+            },
+        }
+    }   
 }
 
 // Parser
@@ -137,9 +183,10 @@ impl MrtParser {
             Some(t) => Ok(t),
             None => Err(Error::ParseError("Invalid subtype found".to_string()))
         }?;
-        let table_dump_header = TableDumpHeader::new(&sub_type, input)?;
+        let metadata = EntryMetadata::from_table_dump(&sub_type);
+        let table_dump_header = TableDumpHeader::new(&metadata, input)?;
         let attribute_parser = AttributeParser::new();
-        let attributes = attribute_parser.process_attributes(&header, sub_type, input)?;
+        let attributes = attribute_parser.process_attributes(&header, metadata, input)?;
         Ok(
             Some(
                 Entry {
@@ -161,7 +208,7 @@ impl AttributeParser {
         AttributeParser { }
     }
 
-    fn process_attributes<T>(&self, header: &CommonHeader, sub_type: TableDumpSubtype,
+    fn process_attributes<T>(&self, header: &CommonHeader, metadata: EntryMetadata,
                              input: &mut T) -> Result<Vec<Attribute>, Error>
         where T: io::BufRead
     {
@@ -180,7 +227,7 @@ impl AttributeParser {
             }?;
             // Pull the attribute's bytes and process them
             let mut attr_input = input.take(length);
-            let attr = self.parse_attribute(attr_type, header, &sub_type, &mut attr_input)?;
+            let attr = self.parse_attribute(attr_type, header, &metadata, &mut attr_input)?;
             match attr {
                 // If we found an attribute we know how to parse, push it
                 Some(attr) => {
@@ -207,13 +254,13 @@ impl AttributeParser {
         Ok(output)
     }
 
-    fn parse_attribute<T>(&self, flag: u8, _header: &CommonHeader, sub_type: &TableDumpSubtype,
+    fn parse_attribute<T>(&self, flag: u8, _header: &CommonHeader, metadata: &EntryMetadata,
                           input: &mut io::Take<T>) -> Result<Option<Attribute>, Error>
         where T: io::BufRead
     {
         match flag {
             constants::attributes::ORIGIN =>  self.parse_origin(input).map(Some),
-            constants::attributes::AS_PATH => self.parse_as_path(sub_type, input).map(Some),
+            constants::attributes::AS_PATH => self.parse_as_path(metadata, input).map(Some),
             _ => Ok(None)
         }
     }
@@ -224,36 +271,27 @@ impl AttributeParser {
         Ok(input.read_u8().map(|x| Attribute::Origin(x))?)
     }
 
-    fn parse_as_path<T>(&self, sub_type: &TableDumpSubtype,
+    fn parse_as_path<T>(&self, metadata: &EntryMetadata,
                         input: &mut io::Take<T>) -> Result<Attribute, Error>
         where T: io::BufRead
     {
         let mut output = AsPath::new();
         while input.limit() > 0 {
-            let segment = self.parse_as_segment(sub_type, input)?;
+            let segment = self.parse_as_segment(metadata, input)?;
             output.add_segment(segment);
         }
         Ok(Attribute::AsPath(output))
     }
 
-    fn parse_as_segment<T>(&self, sub_type: &TableDumpSubtype,
+    fn parse_as_segment<T>(&self, metadata: &EntryMetadata,
                            input: &mut io::Take<T>) -> Result<AsPathSegment, Error>
         where T: io::BufRead
     {
         let segment_type = input.read_u8()?;
         let count = input.read_u8()?;
-        let mut path = Vec::with_capacity(count as usize);
-        match sub_type {
-            TableDumpSubtype::Ipv4As4 | TableDumpSubtype::Ipv6As4 => {
-                for _ in 0..count {
-                    path.push(input.read_u32::<BigEndian>()?);
-                }
-            },
-            TableDumpSubtype::Ipv4 | TableDumpSubtype::Ipv6 => {
-                for _ in 0..count {
-                    path.push(input.read_u16::<BigEndian>().map(|i| i as u32)?);
-                }
-            }
+        let mut path = Vec::with_capacity(count as usize);        
+        for _ in 0..count {
+            path.push(input.read_asn(&metadata.as_length)?);
         }
         match segment_type {
             MrtParser::AS_PATH_AS_SET => Ok(AsPathSegment::AsSet(path)),
@@ -271,11 +309,14 @@ mod tests {
 
     #[test]
     fn parse_as_path_as16() {
+        let metadata = EntryMetadata {
+            afi: Afi::Ipv4,
+            as_length: AsLength::Bits16
+        };
         let parser = AttributeParser::new();
         let buf = "\x02\x03\x00\x01\x00\x02\x00\x03\x01\x02\x00\x04\x00\x05".as_bytes();
         let reader = io::BufReader::new(buf);
-        let result = parser.parse_as_path(&TableDumpSubtype::Ipv4,
-                                          &mut reader.take(buf.len() as u64));
+        let result = parser.parse_as_path(&metadata, &mut reader.take(buf.len() as u64));
         assert_eq!(
             result.unwrap(),
             Attribute::AsPath(
@@ -291,11 +332,14 @@ mod tests {
 
     #[test]
     fn parse_as_path_as32() {
+        let metadata = EntryMetadata {
+            afi: Afi::Ipv4,
+            as_length: AsLength::Bits32
+        };
         let parser = AttributeParser::new();
         let buf = "\x02\x03\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03".as_bytes();
         let reader = io::BufReader::new(buf);
-        let result = parser.parse_as_path(&TableDumpSubtype::Ipv4As4,
-                                          &mut reader.take(buf.len() as u64));
+        let result = parser.parse_as_path(&metadata, &mut reader.take(buf.len() as u64));
         assert_eq!(
             result.unwrap(),
             Attribute::AsPath(
@@ -306,5 +350,18 @@ mod tests {
                 )
             )
         );
+    }
+
+     #[test]
+    fn parse_as_path_invalid() {
+        let metadata = EntryMetadata {
+            afi: Afi::Ipv4,
+            as_length: AsLength::Bits32
+        };
+        let parser = AttributeParser::new();
+        let buf = "\x02\x03\x00\x00".as_bytes();
+        let reader = io::BufReader::new(buf);
+        let result = parser.parse_as_path(&metadata, &mut reader.take(buf.len() as u64));
+        assert!(result.is_err());
     }
 }

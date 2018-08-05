@@ -11,7 +11,8 @@ use ipnetwork::IpNetwork;
 
 use num_traits::FromPrimitive;
 
-use parser::TableDumpSubtype;
+use parser::EntryMetadata;
+use parser::Afi;
 use parser::ReadUtils;
 
 #[derive(Debug)]
@@ -114,29 +115,21 @@ pub struct TableDumpHeader {
 }
 
 impl TableDumpHeader {
-    pub fn new<T: io::Read>(subtype: &TableDumpSubtype,
+    pub fn new<T: io::Read>(metadata: &EntryMetadata,
                             input: &mut T) -> Result<TableDumpHeader, Error> {
         let view_number = input.read_u16::<BigEndian>()?;
         let sequence_number = input.read_u16::<BigEndian>()?;
-        let prefix = match subtype {
-            TableDumpSubtype::Ipv4 | TableDumpSubtype::Ipv4As4 => {
-                input.read_ipv4_prefix().map(IpNetwork::V4)
-            },
-            TableDumpSubtype::Ipv6 | TableDumpSubtype::Ipv6As4 => {
-                input.read_ipv6_prefix().map(IpNetwork::V6)
-            }
+        let prefix = match metadata.afi {
+            Afi::Ipv4 => input.read_ipv4_prefix().map(IpNetwork::V4),
+            Afi::Ipv6 => input.read_ipv6_prefix().map(IpNetwork::V6),
         }?;
         let status = input.read_u8()?;
         let time = input.read_u32::<BigEndian>()? as u64;
-        let peer_address: IpAddr = match subtype {
-            TableDumpSubtype::Ipv4 | TableDumpSubtype::Ipv4As4 => {
-                input.read_ipv4_address().map(IpAddr::V4)
-            },
-            TableDumpSubtype::Ipv6 | TableDumpSubtype::Ipv6As4 => {
-                input.read_ipv6_address().map(IpAddr::V6)
-            }
+        let peer_address: IpAddr = match metadata.afi {
+            Afi::Ipv4 => input.read_ipv4_address().map(IpAddr::V4),
+            Afi::Ipv6 => input.read_ipv6_address().map(IpAddr::V6),
         }?;
-        let peer_asn = input.read_asn(subtype)?;
+        let peer_asn = input.read_asn(&metadata.as_length)?;
         Ok(
             TableDumpHeader {
                 view_number,
