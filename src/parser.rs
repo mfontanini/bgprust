@@ -91,30 +91,36 @@ impl<T: io::Read> Parser<T> {
             output
         }
     }
-}
 
-impl<T: io::Read> IntoIterator for Parser<T> {
-    type Item = Entry;
-    type IntoIter = ParserIterator<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
+    pub fn iter(&mut self) -> ParserIterator<T> {
         ParserIterator::new(self)
     }
 }
 
-pub struct ParserIterator<T: io::Read> {
+impl<T: io::Read> IntoIterator for Parser<T> {
+    type Item = Entry;
+    type IntoIter = ParserIntoIterator<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ParserIntoIterator::new(self)
+    }
+}
+
+// Into iterator
+
+pub struct ParserIntoIterator<T: io::Read> {
     parser: Parser<T>
 }
 
-impl<T: io::Read> ParserIterator<T> {
-    fn new(parser: Parser<T>) -> ParserIterator<T> {
-        ParserIterator {
+impl<T: io::Read> ParserIntoIterator<T> {
+    fn new(parser: Parser<T>) -> ParserIntoIterator<T> {
+        ParserIntoIterator {
             parser
         }
     }
 }
 
-impl<T: io::Read> Iterator for ParserIterator<T> {
+impl<T: io::Read> Iterator for ParserIntoIterator<T> {
     type Item = Entry;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -124,6 +130,32 @@ impl<T: io::Read> Iterator for ParserIterator<T> {
         }
     }
 }
+
+// Normal iterator
+
+pub struct ParserIterator<'a, T: io::Read + 'a> {
+    parser: &'a mut Parser<T>
+}
+
+impl<'a, T: io::Read + 'a> ParserIterator<'a, T> {
+    fn new(parser: &'a mut Parser<T>) -> ParserIterator<T> {
+        ParserIterator {
+            parser
+        }
+    }
+}
+
+impl<'a, T: io::Read + 'a> Iterator for ParserIterator<'a, T> {
+    type Item = Entry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.parser.next() {
+            Ok(v) => v,
+            Err(_) => None
+        }
+    }
+}
+
 
 // Subtype
 
