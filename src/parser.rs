@@ -91,8 +91,13 @@ impl<T: io::Read> Parser<T> {
             output
         }
     }
+}
 
-    pub fn iter(self) -> ParserIterator<T> {
+impl<T: io::Read> IntoIterator for Parser<T> {
+    type Item = Entry;
+    type IntoIter = ParserIterator<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
         ParserIterator::new(self)
     }
 }
