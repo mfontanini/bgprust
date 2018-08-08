@@ -2,7 +2,7 @@ use std::convert;
 use std::error;
 use std::fmt;
 use std::io;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use byteorder::{BigEndian, ReadBytesExt};
@@ -148,8 +148,9 @@ impl TableDumpHeader {
 
 pub mod constants {
     pub mod attributes {
-        pub const ORIGIN:  u8 = 1;
-        pub const AS_PATH: u8 = 2;
+        pub const ORIGIN:   u8 = 1;
+        pub const AS_PATH:  u8 = 2;
+        pub const NEXT_HOP: u8 = 3;
     }
 }
 
@@ -157,6 +158,7 @@ pub mod constants {
 pub enum Attribute {
     Origin(u8),
     AsPath(AsPath),
+    NextHop(Ipv4Addr)
 }
 
 // AS path models

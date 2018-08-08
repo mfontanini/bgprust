@@ -299,6 +299,7 @@ impl AttributeParser {
         match flag {
             constants::attributes::ORIGIN =>  self.parse_origin(input).map(Some),
             constants::attributes::AS_PATH => self.parse_as_path(metadata, input).map(Some),
+            constants::attributes::NEXT_HOP => self.parse_next_hop(input).map(Some),
             _ => Ok(None)
         }
     }
@@ -306,7 +307,7 @@ impl AttributeParser {
     fn parse_origin<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
         where T: io::BufRead
     {
-        Ok(input.read_u8().map(|x| Attribute::Origin(x))?)
+        Ok(input.read_u8().map(Attribute::Origin)?)
     }
 
     fn parse_as_path<T>(&self, metadata: &EntryMetadata,
@@ -338,6 +339,12 @@ impl AttributeParser {
             MrtParser::AS_PATH_CONFED_SET => Ok(AsPathSegment::ConfedSet(path)),
             _ => Err(Error::ParseError("Invalid AS path segment type".to_string()))
         }
+    }
+
+    fn parse_next_hop<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        Ok(input.read_ipv4_address().map(Attribute::NextHop)?)
     }
 }
 
