@@ -68,22 +68,55 @@ impl<T: io::Read> Parser<T> {
     }
 
     pub fn next(&mut self) -> Result<Option<Entry>, Error> {
-        let header = CommonHeader::new(self.input.as_mut().unwrap())?;
+        let header = CommonHeader::new(self.input.as_mut().unwrap());
+        if let Err(e) = header {
+            match e {
+                Error::Io(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+                e => Err(e)
+            }
+        }
+        else {
+            let header = header.unwrap();
 
-        let input = mem::replace(&mut self.input, None).unwrap();
-        let mut body_input = input.take(header.length as u64);
-        let output = match header.entry_type {
-            EntryType::TableDump => {
-                let mut parser = MrtParser::new();
-                parser.next(header, &mut body_input)
-            }
-            _ => {
-                Ok(None)
-            }
-        };
-        // Restore the input
-        self.input = Some(body_input.into_inner());
-        output
+            let input = mem::replace(&mut self.input, None).unwrap();
+            let mut body_input = input.take(header.length as u64);
+            let output = match header.entry_type {
+                EntryType::TableDump => {
+                    let mut parser = MrtParser::new();
+                    parser.next(header, &mut body_input)
+                }
+            };
+            // Restore the input
+            self.input = Some(body_input.into_inner());
+            output
+        }
+    }
+
+    pub fn iter(self) -> ParserIterator<T> {
+        ParserIterator::new(self)
+    }
+}
+
+pub struct ParserIterator<T: io::Read> {
+    parser: Parser<T>
+}
+
+impl<T: io::Read> ParserIterator<T> {
+    fn new(parser: Parser<T>) -> ParserIterator<T> {
+        ParserIterator {
+            parser
+        }
+    }
+}
+
+impl<T: io::Read> Iterator for ParserIterator<T> {
+    type Item = Entry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.parser.next() {
+            Ok(v) => v,
+            Err(_) => None
+        }
     }
 }
 
