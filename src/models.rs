@@ -151,6 +151,8 @@ pub mod constants {
         pub const ORIGIN:   u8 = 1;
         pub const AS_PATH:  u8 = 2;
         pub const NEXT_HOP: u8 = 3;
+        pub const MULTI_EXIT_DISCRIMINATOR: u8 = 4;
+        
     }
 }
 
@@ -158,7 +160,8 @@ pub mod constants {
 pub enum Attribute {
     Origin(u8),
     AsPath(AsPath),
-    NextHop(Ipv4Addr)
+    NextHop(Ipv4Addr),
+    MultiExitDiscriminator(u32),
 }
 
 // AS path models

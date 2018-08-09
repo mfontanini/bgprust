@@ -332,6 +332,7 @@ impl AttributeParser {
             constants::attributes::ORIGIN =>  self.parse_origin(input).map(Some),
             constants::attributes::AS_PATH => self.parse_as_path(metadata, input).map(Some),
             constants::attributes::NEXT_HOP => self.parse_next_hop(input).map(Some),
+            constants::attributes::MULTI_EXIT_DISCRIMINATOR => self.parse_med(input).map(Some),
             _ => Ok(None)
         }
     }
@@ -377,6 +378,12 @@ impl AttributeParser {
         where T: io::BufRead
     {
         Ok(input.read_ipv4_address().map(Attribute::NextHop)?)
+    }
+
+    fn parse_med<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        Ok(input.read_u32::<BigEndian>().map(Attribute::MultiExitDiscriminator)?)
     }
 }
 
