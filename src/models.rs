@@ -3,7 +3,8 @@ use std::error;
 use std::fmt;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
+
+use chrono::prelude::*;
 
 use byteorder::{BigEndian, ReadBytesExt};
 
@@ -74,7 +75,7 @@ pub enum EntryType {
 
 #[derive(Debug)]
 pub struct CommonHeader {
-    pub timestamp: Duration,
+    pub timestamp: DateTime<Utc>,
     pub entry_type: EntryType,
     pub entry_subtype: u16,
     pub length: u32,
@@ -82,7 +83,7 @@ pub struct CommonHeader {
 
 impl CommonHeader {
     pub fn new<T: io::Read>(input: &mut T) -> Result<CommonHeader, Error> {
-        let timestamp = input.read_u32::<BigEndian>()?;
+        let timestamp = input.read_u32::<BigEndian>()? as i64;
         let entry_type = input.read_u16::<BigEndian>()?;
         let entry_type = match EntryType::from_u16(entry_type) {
             Some(t) => Ok(t),
@@ -92,7 +93,7 @@ impl CommonHeader {
         let length = input.read_u32::<BigEndian>()?;
         Ok(
             CommonHeader {
-                timestamp: Duration::new(timestamp as u64, 0),
+                timestamp: DateTime::from_utc(NaiveDateTime::from_timestamp(timestamp, 0), Utc),
                 entry_type,
                 entry_subtype,
                 length
@@ -109,7 +110,7 @@ pub struct TableDumpHeader {
     pub sequence_number: u16,
     pub prefix: IpNetwork,
     pub status: u8,
-    pub originated_time: Duration,
+    pub originated_time: DateTime<Utc>,
     pub peer_address: IpAddr,
     pub peer_asn: Asn
 }
@@ -124,7 +125,7 @@ impl TableDumpHeader {
             Afi::Ipv6 => input.read_ipv6_prefix().map(IpNetwork::V6),
         }?;
         let status = input.read_u8()?;
-        let time = input.read_u32::<BigEndian>()? as u64;
+        let time = input.read_u32::<BigEndian>()? as i64;
         let peer_address: IpAddr = match metadata.afi {
             Afi::Ipv4 => input.read_ipv4_address().map(IpAddr::V4),
             Afi::Ipv6 => input.read_ipv6_address().map(IpAddr::V6),
@@ -136,7 +137,7 @@ impl TableDumpHeader {
                 sequence_number,
                 prefix,
                 status,
-                originated_time: Duration::new(time, 0),
+                originated_time: DateTime::from_utc(NaiveDateTime::from_timestamp(time, 0), Utc),
                 peer_address,
                 peer_asn
             }
@@ -152,7 +153,7 @@ pub mod constants {
         pub const AS_PATH:  u8 = 2;
         pub const NEXT_HOP: u8 = 3;
         pub const MULTI_EXIT_DISCRIMINATOR: u8 = 4;
-        
+
     }
 }
 

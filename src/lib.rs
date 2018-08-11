@@ -1,3 +1,4 @@
+extern crate chrono;
 extern crate ipnetwork;
 extern crate byteorder;
 #[macro_use] extern crate enum_primitive_derive;
