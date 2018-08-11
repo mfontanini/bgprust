@@ -153,7 +153,12 @@ pub mod constants {
         pub const AS_PATH:  u8 = 2;
         pub const NEXT_HOP: u8 = 3;
         pub const MULTI_EXIT_DISCRIMINATOR: u8 = 4;
-
+        pub const LOCAL_PREFERENCE: u8 = 5;
+        pub const ATOMIC_AGGREGATE: u8 = 6;
+        pub const AGGREGATOR: u8 = 7;
+        pub const COMMUNITIES: u8 = 8;
+        pub const LARGE_COMMUNITIES: u8 = 32;
+        pub const ATTRIBUTES_END: u8 = LARGE_COMMUNITIES + 1;
     }
 }
 
@@ -163,6 +168,10 @@ pub enum Attribute {
     AsPath(AsPath),
     NextHop(Ipv4Addr),
     MultiExitDiscriminator(u32),
+    LocalPreference(u32),
+    Aggregator(Asn, Ipv4Addr),
+    Communities(Vec<Community>),
+    LargeCommunities(Vec<LargeCommunity>),
 }
 
 // AS path models
@@ -212,3 +221,28 @@ impl Display for AsPathSegment {
     }
 }
 */
+
+// Communities
+
+#[derive(Debug, PartialEq)]
+pub enum Community {
+    NoExport,
+    NoAdvertise,
+    NoExportSubConfed,
+    Custom(Asn, u16)
+}
+
+#[derive(Debug, PartialEq)]
+pub struct LargeCommunity {
+    global_administrator: u32,
+    local_data: [u32; 2]
+}
+
+impl LargeCommunity {
+    pub fn new(global_administrator: u32, local_data: [u32; 2]) -> LargeCommunity {
+        LargeCommunity {
+            global_administrator,
+            local_data
+        }
+    }
+}

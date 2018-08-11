@@ -49,6 +49,23 @@ pub trait ReadUtils: io::Read {
             AsLength::Bits32 => self.read_u32::<BigEndian>(),
         }
     }
+
+    fn read_asns(&mut self, as_length: &AsLength, count: usize) -> io::Result<Vec<Asn>> {
+        let mut path = Vec::with_capacity(count);
+        match as_length {
+            AsLength::Bits16 => {
+                for _ in 0..count {
+                    path.push(self.read_u16::<BigEndian>()? as u32);
+                }
+            },
+            AsLength::Bits32 => {
+                for _ in 0..count {
+                    path.push(self.read_u32::<BigEndian>()?);
+                }
+            }
+        };
+        Ok(path)
+    }
 }
 
 // All types that implement Read can now read prefixes
@@ -270,22 +287,25 @@ impl MrtParser {
 }
 
 struct AttributeParser {
-
+    attributes: Vec<Attribute>,
+    attribute_indexes: [Option<u16>; constants::attributes::ATTRIBUTES_END as usize],
 }
 
 impl AttributeParser {
     fn new() -> AttributeParser {
-        AttributeParser { }
+        AttributeParser {
+            attributes: Vec::new(),
+            attribute_indexes: [None; constants::attributes::ATTRIBUTES_END as usize],
+        }
     }
 
-    fn process_attributes<T>(&self, header: &CommonHeader, metadata: EntryMetadata,
+    fn process_attributes<T>(mut self, header: &CommonHeader, metadata: EntryMetadata,
                              input: &mut T) -> Result<Vec<Attribute>, Error>
         where T: io::BufRead
     {
         let count = input.read_u16::<BigEndian>()?;
         // We only want to read at most `count` bytes
         let mut input = input.take(count as u64);
-        let mut output = Vec::new();
         while input.limit() > 0 {
             let flag = input.read_u8()?;
             let attr_type = input.read_u8()?;
@@ -301,7 +321,7 @@ impl AttributeParser {
             match attr {
                 // If we found an attribute we know how to parse, push it
                 Some(attr) => {
-                    output.push(attr);
+                    self.attributes.push(attr);
                 },
                 // If we don't know how to parse it, discard it
                 None => {
@@ -321,20 +341,28 @@ impl AttributeParser {
             // Restore the wrapped buffer
             input = attr_input.into_inner();
         }
-        Ok(output)
+        Ok(self.attributes)
     }
 
-    fn parse_attribute<T>(&self, flag: u8, _header: &CommonHeader, metadata: &EntryMetadata,
+    fn parse_attribute<T>(&mut self, flag: u8, _header: &CommonHeader, metadata: &EntryMetadata,
                           input: &mut io::Take<T>) -> Result<Option<Attribute>, Error>
         where T: io::BufRead
     {
-        match flag {
+        let output = match flag {
             constants::attributes::ORIGIN =>  self.parse_origin(input).map(Some),
             constants::attributes::AS_PATH => self.parse_as_path(metadata, input).map(Some),
             constants::attributes::NEXT_HOP => self.parse_next_hop(input).map(Some),
             constants::attributes::MULTI_EXIT_DISCRIMINATOR => self.parse_med(input).map(Some),
+            constants::attributes::LOCAL_PREFERENCE => self.parse_local_pref(input).map(Some),
+            constants::attributes::AGGREGATOR => self.parse_aggregator(metadata, input).map(Some),
+            constants::attributes::COMMUNITIES => self.parse_communities(input).map(Some),
+            constants::attributes::LARGE_COMMUNITIES => self.parse_large_communities(input).map(Some),
             _ => Ok(None)
+        };
+        if let Ok(Some(_)) = output.as_ref() {
+            self.attribute_indexes[flag as usize] = Some(self.attributes.len() as u16);
         }
+        output
     }
 
     fn parse_origin<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
@@ -361,10 +389,7 @@ impl AttributeParser {
     {
         let segment_type = input.read_u8()?;
         let count = input.read_u8()?;
-        let mut path = Vec::with_capacity(count as usize);        
-        for _ in 0..count {
-            path.push(input.read_asn(&metadata.as_length)?);
-        }
+        let path = input.read_asns(&metadata.as_length, count as usize)?;
         match segment_type {
             MrtParser::AS_PATH_AS_SET => Ok(AsPathSegment::AsSet(path)),
             MrtParser::AS_PATH_AS_SEQUENCE => Ok(AsPathSegment::AsSequence(path)),
@@ -384,6 +409,58 @@ impl AttributeParser {
         where T: io::BufRead
     {
         Ok(input.read_u32::<BigEndian>().map(Attribute::MultiExitDiscriminator)?)
+    }
+
+    fn parse_local_pref<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        Ok(input.read_u32::<BigEndian>().map(Attribute::LocalPreference)?)
+    }
+
+    fn parse_aggregator<T>(&self, metadata: &EntryMetadata,
+                           input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        let asn = input.read_asn(&metadata.as_length)?;
+        let addr = input.read_ipv4_address()?;
+        Ok(Attribute::Aggregator(asn, addr))
+    }
+
+    fn parse_communities<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        const COMMUNITY_NO_EXPORT: u32 = 0xFFFFFF01;
+        const COMMUNITY_NO_ADVERTISE: u32 = 0xFFFFFF02;
+        const COMMUNITY_NO_EXPORT_SUBCONFED: u32 = 0xFFFFFF03;
+        let mut communities = Vec::with_capacity((input.limit() / 4) as usize);
+        while input.limit() > 0 {
+            let community = input.read_u32::<BigEndian>()?;
+            match community {
+                COMMUNITY_NO_EXPORT => communities.push(Community::NoExport),
+                COMMUNITY_NO_ADVERTISE => communities.push(Community::NoAdvertise),
+                COMMUNITY_NO_EXPORT_SUBCONFED => communities.push(Community::NoExportSubConfed),
+                value => {
+                    let asn = (value >> 16) & 0xffff;
+                    let value = (value & 0xffff) as u16;
+                    communities.push(Community::Custom(asn, value));
+                }
+            }
+        }
+        Ok(Attribute::Communities(communities))
+    }
+
+    fn parse_large_communities<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        let mut communities = Vec::new();
+        while input.limit() > 0 {
+            let global_administrator = input.read_u32::<BigEndian>()?;
+            let mut local_data : [u32; 2] = [0; 2];
+            local_data[0] = input.read_u32::<BigEndian>()?;
+            local_data[1] = input.read_u32::<BigEndian>()?;
+            communities.push(LargeCommunity::new(global_administrator, local_data));
+        }
+        Ok(Attribute::LargeCommunities(communities))
     }
 }
 
@@ -436,7 +513,7 @@ mod tests {
         );
     }
 
-     #[test]
+    #[test]
     fn parse_as_path_invalid() {
         let metadata = EntryMetadata {
             afi: Afi::Ipv4,
@@ -447,5 +524,22 @@ mod tests {
         let reader = io::BufReader::new(buf);
         let result = parser.parse_as_path(&metadata, &mut reader.take(buf.len() as u64));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_communities() {
+        let buf = [12, 185, 15, 160, 12, 185, 19, 175].as_ref();
+        let reader = io::BufReader::new(buf);
+        let parser = AttributeParser::new();
+        let result = parser.parse_communities(&mut reader.take(buf.len() as u64));
+        assert_eq!(
+            result.unwrap(),
+            Attribute::Communities(
+                vec![
+                    Community::Custom(3257, 4000),
+                    Community::Custom(3257, 5039)
+                ]
+            )
+        );
     }
 }
