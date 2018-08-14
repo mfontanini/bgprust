@@ -244,11 +244,6 @@ pub struct MrtParser {
 
 impl MrtParser {
     const ATTRIBUTE_EXTENDED_LENGTH: u8 = 0x10;
-    // AS path flags
-    const AS_PATH_AS_SET: u8 = 1;
-    const AS_PATH_AS_SEQUENCE: u8 = 2;
-    const AS_PATH_CONFED_SEQUENCE: u8 = 3;
-    const AS_PATH_CONFED_SET: u8 = 4;
 
     pub fn new() -> MrtParser {
         MrtParser {
@@ -292,6 +287,12 @@ struct AttributeParser {
 }
 
 impl AttributeParser {
+    // AS path flags
+    const AS_PATH_AS_SET: u8 = 1;
+    const AS_PATH_AS_SEQUENCE: u8 = 2;
+    const AS_PATH_CONFED_SEQUENCE: u8 = 3;
+    const AS_PATH_CONFED_SET: u8 = 4;
+
     fn new() -> AttributeParser {
         AttributeParser {
             attributes: Vec::new(),
@@ -356,6 +357,9 @@ impl AttributeParser {
             constants::attributes::LOCAL_PREFERENCE => self.parse_local_pref(input).map(Some),
             constants::attributes::AGGREGATOR => self.parse_aggregator(metadata, input).map(Some),
             constants::attributes::COMMUNITIES => self.parse_communities(input).map(Some),
+            constants::attributes::ORIGINATOR_ID => self.parse_originator_id(input).map(Some),
+            constants::attributes::CLUSTER_LIST => self.parse_clusters(input).map(Some),
+            constants::attributes::NEW_AGGREGATOR => self.parse_new_aggregator(input).map(Some),
             constants::attributes::LARGE_COMMUNITIES => self.parse_large_communities(input).map(Some),
             _ => Ok(None)
         };
@@ -391,10 +395,10 @@ impl AttributeParser {
         let count = input.read_u8()?;
         let path = input.read_asns(&metadata.as_length, count as usize)?;
         match segment_type {
-            MrtParser::AS_PATH_AS_SET => Ok(AsPathSegment::AsSet(path)),
-            MrtParser::AS_PATH_AS_SEQUENCE => Ok(AsPathSegment::AsSequence(path)),
-            MrtParser::AS_PATH_CONFED_SEQUENCE => Ok(AsPathSegment::ConfedSequence(path)),
-            MrtParser::AS_PATH_CONFED_SET => Ok(AsPathSegment::ConfedSet(path)),
+            AttributeParser::AS_PATH_AS_SET => Ok(AsPathSegment::AsSet(path)),
+            AttributeParser::AS_PATH_AS_SEQUENCE => Ok(AsPathSegment::AsSequence(path)),
+            AttributeParser::AS_PATH_CONFED_SEQUENCE => Ok(AsPathSegment::ConfedSequence(path)),
+            AttributeParser::AS_PATH_CONFED_SET => Ok(AsPathSegment::ConfedSet(path)),
             _ => Err(Error::ParseError("Invalid AS path segment type".to_string()))
         }
     }
@@ -447,6 +451,30 @@ impl AttributeParser {
             }
         }
         Ok(Attribute::Communities(communities))
+    }
+
+    fn parse_originator_id<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        Ok(Attribute::OriginatorId(input.read_ipv4_address()?))
+    }
+
+    fn parse_clusters<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        let mut clusters = Vec::new();
+        while input.limit() > 0 {
+            clusters.push(input.read_ipv4_address()?);
+        }
+        Ok(Attribute::Clusters(clusters))
+    }
+
+    fn parse_new_aggregator<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        let asn = input.read_asn(&AsLength::Bits32)?;
+        let addr = input.read_ipv4_address()?;
+        Ok(Attribute::NewAggregator(asn, addr))
     }
 
     fn parse_large_communities<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
