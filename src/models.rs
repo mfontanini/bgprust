@@ -159,7 +159,8 @@ pub mod constants {
         pub const COMMUNITIES: u8 = 8;
         pub const ORIGINATOR_ID: u8 = 9;
         pub const CLUSTER_LIST: u8 = 10;
-        pub const NEW_AGGREGATOR: u8 = 18;
+        pub const AS4_PATH: u8 = 17;
+        pub const AS4_AGGREGATOR: u8 = 18;
         pub const LARGE_COMMUNITIES: u8 = 32;
         pub const ATTRIBUTES_END: u8 = LARGE_COMMUNITIES + 1;
     }
@@ -177,7 +178,8 @@ pub enum Attribute {
     LargeCommunities(Vec<LargeCommunity>),
     OriginatorId(Ipv4Addr),
     Clusters(Vec<Ipv4Addr>),
-    NewAggregator(Asn, Ipv4Addr),
+    As4Aggregator(Asn, Ipv4Addr),
+    As4Path(AsPath),
 }
 
 // AS path models

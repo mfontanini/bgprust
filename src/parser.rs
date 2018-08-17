@@ -351,7 +351,7 @@ impl AttributeParser {
     {
         let output = match flag {
             constants::attributes::ORIGIN =>  self.parse_origin(input).map(Some),
-            constants::attributes::AS_PATH => self.parse_as_path(metadata, input).map(Some),
+            constants::attributes::AS_PATH => self.parse_as_path(&metadata.as_length, input).map(Some),
             constants::attributes::NEXT_HOP => self.parse_next_hop(input).map(Some),
             constants::attributes::MULTI_EXIT_DISCRIMINATOR => self.parse_med(input).map(Some),
             constants::attributes::LOCAL_PREFERENCE => self.parse_local_pref(input).map(Some),
@@ -359,7 +359,8 @@ impl AttributeParser {
             constants::attributes::COMMUNITIES => self.parse_communities(input).map(Some),
             constants::attributes::ORIGINATOR_ID => self.parse_originator_id(input).map(Some),
             constants::attributes::CLUSTER_LIST => self.parse_clusters(input).map(Some),
-            constants::attributes::NEW_AGGREGATOR => self.parse_new_aggregator(input).map(Some),
+            constants::attributes::AS4_PATH => self.parse_as4_path(input).map(Some),
+            constants::attributes::AS4_AGGREGATOR => self.parse_as4_aggregator(input).map(Some),
             constants::attributes::LARGE_COMMUNITIES => self.parse_large_communities(input).map(Some),
             _ => Ok(None)
         };
@@ -375,25 +376,35 @@ impl AttributeParser {
         Ok(input.read_u8().map(Attribute::Origin)?)
     }
 
-    fn parse_as_path<T>(&self, metadata: &EntryMetadata,
+    fn parse_as_path<T>(&self, as_length: &AsLength,
                         input: &mut io::Take<T>) -> Result<Attribute, Error>
         where T: io::BufRead
     {
         let mut output = AsPath::new();
         while input.limit() > 0 {
-            let segment = self.parse_as_segment(metadata, input)?;
+            let segment = self.parse_as_segment(as_length, input)?;
             output.add_segment(segment);
         }
         Ok(Attribute::AsPath(output))
     }
 
-    fn parse_as_segment<T>(&self, metadata: &EntryMetadata,
+    fn parse_as4_path<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        match self.parse_as_path(&AsLength::Bits32, input) {
+            Ok(Attribute::AsPath(p)) => Ok(Attribute::As4Path(p)),
+            Ok(_) => panic!("parse_as_path didn't return an AS path"),
+            Err(e) => Err(e)
+        }
+    }
+
+    fn parse_as_segment<T>(&self, as_length: &AsLength,
                            input: &mut io::Take<T>) -> Result<AsPathSegment, Error>
         where T: io::BufRead
     {
         let segment_type = input.read_u8()?;
         let count = input.read_u8()?;
-        let path = input.read_asns(&metadata.as_length, count as usize)?;
+        let path = input.read_asns(as_length, count as usize)?;
         match segment_type {
             AttributeParser::AS_PATH_AS_SET => Ok(AsPathSegment::AsSet(path)),
             AttributeParser::AS_PATH_AS_SEQUENCE => Ok(AsPathSegment::AsSequence(path)),
@@ -469,12 +480,12 @@ impl AttributeParser {
         Ok(Attribute::Clusters(clusters))
     }
 
-    fn parse_new_aggregator<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+    fn parse_as4_aggregator<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
         where T: io::BufRead
     {
         let asn = input.read_asn(&AsLength::Bits32)?;
         let addr = input.read_ipv4_address()?;
-        Ok(Attribute::NewAggregator(asn, addr))
+        Ok(Attribute::As4Aggregator(asn, addr))
     }
 
     fn parse_large_communities<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
@@ -498,14 +509,11 @@ mod tests {
 
     #[test]
     fn parse_as_path_as16() {
-        let metadata = EntryMetadata {
-            afi: Afi::Ipv4,
-            as_length: AsLength::Bits16
-        };
+        let as_length = AsLength::Bits16;
         let parser = AttributeParser::new();
         let buf = "\x02\x03\x00\x01\x00\x02\x00\x03\x01\x02\x00\x04\x00\x05".as_bytes();
         let reader = io::BufReader::new(buf);
-        let result = parser.parse_as_path(&metadata, &mut reader.take(buf.len() as u64));
+        let result = parser.parse_as_path(&as_length, &mut reader.take(buf.len() as u64));
         assert_eq!(
             result.unwrap(),
             Attribute::AsPath(
@@ -521,14 +529,11 @@ mod tests {
 
     #[test]
     fn parse_as_path_as32() {
-        let metadata = EntryMetadata {
-            afi: Afi::Ipv4,
-            as_length: AsLength::Bits32
-        };
+        let as_length = AsLength::Bits32;
         let parser = AttributeParser::new();
         let buf = "\x02\x03\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03".as_bytes();
         let reader = io::BufReader::new(buf);
-        let result = parser.parse_as_path(&metadata, &mut reader.take(buf.len() as u64));
+        let result = parser.parse_as_path(&as_length, &mut reader.take(buf.len() as u64));
         assert_eq!(
             result.unwrap(),
             Attribute::AsPath(
@@ -543,14 +548,11 @@ mod tests {
 
     #[test]
     fn parse_as_path_invalid() {
-        let metadata = EntryMetadata {
-            afi: Afi::Ipv4,
-            as_length: AsLength::Bits32
-        };
+        let as_length = AsLength::Bits32;
         let parser = AttributeParser::new();
         let buf = "\x02\x03\x00\x00".as_bytes();
         let reader = io::BufReader::new(buf);
-        let result = parser.parse_as_path(&metadata, &mut reader.take(buf.len() as u64));
+        let result = parser.parse_as_path(&as_length, &mut reader.take(buf.len() as u64));
         assert!(result.is_err());
     }
 
