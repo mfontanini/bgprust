@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::convert;
 use std::error;
 use std::fmt;
+use std::hash::{Hasher, BuildHasherDefault};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -52,13 +54,35 @@ impl convert::From<io::Error> for Error {
 
 pub type Asn = u32;
 
+// Attribute hasher
+
+#[derive(Default)]
+pub struct AttributeHasher {
+    value: u64
+}
+
+impl Hasher for AttributeHasher {
+    fn finish(&self) -> u64 {
+        self.value
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        if bytes.len() != 1 {
+            panic!("Trying to hash slice of size {:?}", bytes.len());
+        }
+        self.value |= bytes[0] as u64;
+    }
+}
+
+pub type AttributeMap = HashMap<u8, Attribute, BuildHasherDefault<AttributeHasher>>;
+
 // The actual header Parser::next returns
 
 #[derive(Debug)]
 pub struct Entry {
     pub header: CommonHeader,
     pub body: Body,
-    pub attributes: Vec<Attribute>
+    pub attributes: AttributeMap
 }
 
 #[derive(Debug)]

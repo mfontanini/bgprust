@@ -1,4 +1,5 @@
 use std::mem;
+use std::hash::BuildHasherDefault;
 use std::io;
 use std::io::Read;
 use std::io::BufRead;
@@ -282,8 +283,7 @@ impl MrtParser {
 }
 
 struct AttributeParser {
-    attributes: Vec<Attribute>,
-    attribute_indexes: [Option<u16>; constants::attributes::ATTRIBUTES_END as usize],
+    attributes: AttributeMap,
 }
 
 impl AttributeParser {
@@ -295,13 +295,14 @@ impl AttributeParser {
 
     fn new() -> AttributeParser {
         AttributeParser {
-            attributes: Vec::new(),
-            attribute_indexes: [None; constants::attributes::ATTRIBUTES_END as usize],
+            attributes: AttributeMap::with_hasher(
+                BuildHasherDefault::<AttributeHasher>::default()
+            )
         }
     }
 
-    fn process_attributes<T>(mut self, header: &CommonHeader, metadata: EntryMetadata,
-                             input: &mut T) -> Result<Vec<Attribute>, Error>
+    fn process_attributes<T>(mut self, _header: &CommonHeader, metadata: EntryMetadata,
+                             input: &mut T) -> Result<AttributeMap, Error>
         where T: io::BufRead
     {
         let count = input.read_u16::<BigEndian>()?;
@@ -318,11 +319,11 @@ impl AttributeParser {
             }?;
             // Pull the attribute's bytes and process them
             let mut attr_input = input.take(length);
-            let attr = self.parse_attribute(attr_type, header, &metadata, &mut attr_input)?;
+            let attr = self.parse_attribute(attr_type, &metadata, &mut attr_input)?;
             match attr {
                 // If we found an attribute we know how to parse, push it
                 Some(attr) => {
-                    self.attributes.push(attr);
+                    self.attributes.insert(attr_type, attr);
                 },
                 // If we don't know how to parse it, discard it
                 None => {
@@ -345,11 +346,11 @@ impl AttributeParser {
         Ok(self.attributes)
     }
 
-    fn parse_attribute<T>(&mut self, flag: u8, _header: &CommonHeader, metadata: &EntryMetadata,
+    fn parse_attribute<T>(&mut self, attr_type: u8, metadata: &EntryMetadata,
                           input: &mut io::Take<T>) -> Result<Option<Attribute>, Error>
         where T: io::BufRead
     {
-        let output = match flag {
+        match attr_type {
             constants::attributes::ORIGIN =>  self.parse_origin(input).map(Some),
             constants::attributes::AS_PATH => self.parse_as_path(&metadata.as_length, input).map(Some),
             constants::attributes::NEXT_HOP => self.parse_next_hop(input).map(Some),
@@ -363,11 +364,7 @@ impl AttributeParser {
             constants::attributes::AS4_AGGREGATOR => self.parse_as4_aggregator(input).map(Some),
             constants::attributes::LARGE_COMMUNITIES => self.parse_large_communities(input).map(Some),
             _ => Ok(None)
-        };
-        if let Ok(Some(_)) = output.as_ref() {
-            self.attribute_indexes[flag as usize] = Some(self.attributes.len() as u16);
         }
-        output
     }
 
     fn parse_origin<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
