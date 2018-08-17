@@ -208,7 +208,7 @@ pub enum Attribute {
 
 // AS path models
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum AsPathSegment {
     AsSequence(Vec<Asn>),
     AsSet(Vec<Asn>),
@@ -216,7 +216,16 @@ pub enum AsPathSegment {
     ConfedSet(Vec<Asn>),
 }
 
-#[derive(Debug, PartialEq)]
+impl AsPathSegment {
+    pub fn count_asns(&self) -> usize {
+        match self {
+            AsPathSegment::AsSequence(v) | AsPathSegment::ConfedSequence(v) => v.len(),
+            AsPathSegment::AsSet(_) | AsPathSegment::ConfedSet(_) => 1,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct AsPath {
     segments: Vec<AsPathSegment>,
 }
@@ -236,6 +245,14 @@ impl AsPath {
 
     pub fn add_segment(&mut self, segment: AsPathSegment) {
         self.segments.push(segment);
+    }
+
+    pub fn segments(&self) -> &Vec<AsPathSegment> {
+        &self.segments
+    }
+
+    pub fn count_asns(&self) -> usize {
+        self.segments.iter().map(AsPathSegment::count_asns).sum()
     }
 }
 

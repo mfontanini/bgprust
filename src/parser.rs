@@ -1,3 +1,4 @@
+use std::cmp;
 use std::mem;
 use std::hash::BuildHasherDefault;
 use std::io;
@@ -498,6 +499,39 @@ impl AttributeParser {
         }
         Ok(Attribute::LargeCommunities(communities))
     }
+
+    fn merge_as_paths(&self, current_path: &AsPath, as4_path: &AsPath) -> AsPath {
+        let current_count = current_path.count_asns();
+        let as4_path_count = as4_path.count_asns();
+        if current_count <= as4_path_count {
+            return current_path.clone();
+        }
+        let target_count = current_count - as4_path_count;
+        let mut output_segments = Vec::new();
+        let mut output_count : usize = 0;
+        for segment in current_path.segments() {
+            if output_count >= target_count {
+                break;
+            }
+            let segment_count = segment.count_asns();
+            let max_copyable = cmp::min(segment_count, target_count - output_count);
+            let copied_segment = match segment {
+                AsPathSegment::AsSequence(v) => {
+                    AsPathSegment::AsSequence(v[..max_copyable as usize].to_vec())
+                },
+                AsPathSegment::ConfedSequence(v) => {
+                    AsPathSegment::ConfedSequence(v[..max_copyable as usize].to_vec())
+                },
+                _ => segment.clone()
+            };
+            output_count += copied_segment.count_asns();
+            output_segments.push(copied_segment);
+        }
+        for segment in as4_path.segments() {
+            output_segments.push(segment.clone());
+        }
+        AsPath::from_segments(output_segments)
+    }
 }
 
 #[cfg(test)]
@@ -551,6 +585,72 @@ mod tests {
         let reader = io::BufReader::new(buf);
         let result = parser.parse_as_path(&as_length, &mut reader.take(buf.len() as u64));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn merge_as_paths_only_sequence() {
+        let current_path = AsPath::from_segments(
+            vec![
+                AsPathSegment::AsSequence(vec![1, 2, 23456]),
+            ]
+        );
+        let as4_path = AsPath::from_segments(
+            vec![
+                AsPathSegment::AsSequence(vec![2, 999999]),
+            ]
+        );
+        let parser = AttributeParser::new();
+        assert_eq!(
+            AsPath::from_segments(
+                vec![
+                    AsPathSegment::AsSequence(vec![1]),
+                    AsPathSegment::AsSequence(vec![2, 999999])
+                ]
+            ),
+            parser.merge_as_paths(&current_path, &as4_path)
+        );
+    }
+
+    #[test]
+    fn merge_as_paths_as_set() {
+        let current_path = AsPath::from_segments(
+            vec![
+                AsPathSegment::AsSequence(vec![1, 2]),
+                AsPathSegment::AsSet(vec![3, 23456])
+            ]
+        );
+        let as4_path = AsPath::from_segments(
+            vec![
+                AsPathSegment::AsSequence(vec![2]),
+                AsPathSegment::AsSet(vec![3, 999999])
+            ]
+        );
+        let parser = AttributeParser::new();
+        assert_eq!(
+            AsPath::from_segments(
+                vec![
+                    AsPathSegment::AsSequence(vec![1]),
+                    AsPathSegment::AsSequence(vec![2]),
+                    AsPathSegment::AsSet(vec![3, 999999]),
+                ]
+            ),
+            parser.merge_as_paths(&current_path, &as4_path)
+        );
+    }
+
+    #[test]
+    fn merge_as_paths_empty_current_path() {
+        let current_path = AsPath::from_segments(Vec::new());
+        let as4_path = AsPath::from_segments(
+            vec![
+                AsPathSegment::AsSequence(vec![2])
+            ]
+        );
+        let parser = AttributeParser::new();
+        assert_eq!(
+            current_path,
+            parser.merge_as_paths(&current_path, &as4_path)
+        );
     }
 
     #[test]
