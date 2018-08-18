@@ -313,15 +313,12 @@ impl AttributeParser {
             let flag = input.read_u8()?;
             let attr_type = input.read_u8()?;
             let length = match flag & MrtParser::ATTRIBUTE_EXTENDED_LENGTH {
-                MrtParser::ATTRIBUTE_EXTENDED_LENGTH => {
-                    input.read_u16::<BigEndian>().map(|x| x as u64)
-                },
-                _ => input.read_u8().map(|x| x as u64)
+                0 => input.read_u8().map(|x| x as u64),
+                _ => input.read_u16::<BigEndian>().map(|x| x as u64)
             }?;
             // Pull the attribute's bytes and process them
             let mut attr_input = input.take(length);
-            let attr = self.parse_attribute(attr_type, &metadata, &mut attr_input)?;
-            match attr {
+            match self.parse_attribute(attr_type, &metadata, &mut attr_input)? {
                 // If we found an attribute we know how to parse, push it
                 Some(attr) => {
                     self.attributes.insert(attr_type, attr);
@@ -351,21 +348,24 @@ impl AttributeParser {
                           input: &mut io::Take<T>) -> Result<Option<Attribute>, Error>
         where T: io::BufRead
     {
-        match attr_type {
-            constants::attributes::ORIGIN =>  self.parse_origin(input).map(Some),
-            constants::attributes::AS_PATH => self.parse_as_path(&metadata.as_length, input).map(Some),
-            constants::attributes::NEXT_HOP => self.parse_next_hop(input).map(Some),
-            constants::attributes::MULTI_EXIT_DISCRIMINATOR => self.parse_med(input).map(Some),
-            constants::attributes::LOCAL_PREFERENCE => self.parse_local_pref(input).map(Some),
-            constants::attributes::AGGREGATOR => self.parse_aggregator(metadata, input).map(Some),
-            constants::attributes::COMMUNITIES => self.parse_communities(input).map(Some),
-            constants::attributes::ORIGINATOR_ID => self.parse_originator_id(input).map(Some),
-            constants::attributes::CLUSTER_LIST => self.parse_clusters(input).map(Some),
-            constants::attributes::AS4_PATH => self.parse_as4_path(input).map(Some),
-            constants::attributes::AS4_AGGREGATOR => self.parse_as4_aggregator(input).map(Some),
-            constants::attributes::LARGE_COMMUNITIES => self.parse_large_communities(input).map(Some),
-            _ => Ok(None)
-        }
+        let attribute = match attr_type {
+            constants::attributes::ORIGIN =>  self.parse_origin(input),
+            constants::attributes::AS_PATH => self.parse_as_path(&metadata.as_length, input),
+            constants::attributes::NEXT_HOP => self.parse_next_hop(input),
+            constants::attributes::MULTI_EXIT_DISCRIMINATOR => self.parse_med(input),
+            constants::attributes::LOCAL_PREFERENCE => self.parse_local_pref(input),
+            constants::attributes::AGGREGATOR => self.parse_aggregator(metadata, input),
+            constants::attributes::COMMUNITIES => self.parse_communities(input),
+            constants::attributes::ORIGINATOR_ID => self.parse_originator_id(input),
+            constants::attributes::CLUSTER_LIST => self.parse_clusters(input),
+            constants::attributes::AS4_PATH => self.parse_as4_path(input),
+            constants::attributes::AS4_AGGREGATOR => self.parse_as4_aggregator(input),
+            constants::attributes::LARGE_COMMUNITIES => self.parse_large_communities(input),
+            _ => {
+                return Ok(None);
+            }
+        };
+        attribute.map(Some)
     }
 
     fn parse_origin<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
@@ -492,9 +492,10 @@ impl AttributeParser {
         let mut communities = Vec::new();
         while input.limit() > 0 {
             let global_administrator = input.read_u32::<BigEndian>()?;
-            let mut local_data : [u32; 2] = [0; 2];
-            local_data[0] = input.read_u32::<BigEndian>()?;
-            local_data[1] = input.read_u32::<BigEndian>()?;
+            let local_data = [
+                input.read_u32::<BigEndian>()?,
+                input.read_u32::<BigEndian>()?
+            ];
             communities.push(LargeCommunity::new(global_administrator, local_data));
         }
         Ok(Attribute::LargeCommunities(communities))
