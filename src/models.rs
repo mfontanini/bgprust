@@ -218,6 +218,7 @@ pub mod constants {
         pub const ORIGINATOR_ID: u8 = 9;
         pub const CLUSTER_LIST: u8 = 10;
         pub const MP_REACHABLE_NLRI: u8 = 14;
+        pub const MP_UNREACHABLE_NLRI: u8 = 15;
         pub const AS4_PATH: u8 = 17;
         pub const AS4_AGGREGATOR: u8 = 18;
         pub const LARGE_COMMUNITIES: u8 = 32;
@@ -238,6 +239,7 @@ pub enum Attribute {
     OriginatorId(Ipv4Addr),
     Clusters(Vec<Ipv4Addr>),
     MpReachableNlri(MpReachableNlri),
+    MpUnreachableNlri(MpUnreachableNlri),
     As4Aggregator(Asn, Ipv4Addr),
     As4Path(AsPath),
 }
@@ -369,6 +371,23 @@ impl MpReachableNlri {
             afi,
             safi,
             next_hop,
+            prefixes
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct MpUnreachableNlri {
+    afi: Afi,
+    safi: Safi,
+    prefixes: Vec<NetworkPrefix>,
+}
+
+impl MpUnreachableNlri {
+    pub fn new(afi: Afi, safi: Safi, prefixes: Vec<NetworkPrefix>) -> MpUnreachableNlri {
+        MpUnreachableNlri {
+            afi,
+            safi,
             prefixes
         }
     }

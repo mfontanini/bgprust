@@ -352,6 +352,7 @@ impl AttributeParser {
             constants::attributes::ORIGINATOR_ID => self.parse_originator_id(input),
             constants::attributes::CLUSTER_LIST => self.parse_clusters(input),
             constants::attributes::MP_REACHABLE_NLRI => self.parse_mp_reachable(input),
+            constants::attributes::MP_UNREACHABLE_NLRI => self.parse_mp_unreachable(input),
             constants::attributes::AS4_PATH => self.parse_as4_path(input),
             constants::attributes::AS4_AGGREGATOR => self.parse_as4_aggregator(input),
             constants::attributes::LARGE_COMMUNITIES => self.parse_large_communities(input),
@@ -499,6 +500,35 @@ impl AttributeParser {
                     afi,
                     safi,
                     next_hop,
+                    prefixes
+                )
+            )
+        )
+    }
+
+    fn parse_mp_unreachable<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        let afi = input.read_u16::<BigEndian>()?;
+        let safi = input.read_u8()?;
+        let (afi, safi) = (Afi::from_i16(afi as i16), Safi::from_i8(safi as i8));
+        match (&afi, &safi) {
+            (None, _) => {
+                return Err(Error::ParseError("Unknown AFI type".to_string()));
+            },
+            (_, None) => {
+                return Err(Error::ParseError("Unknown SAFI type".to_string()));
+            },
+            _ => ()
+        };
+        let afi = afi.unwrap();
+        let safi = safi.unwrap();
+        let prefixes = self.parse_mp_prefix_list(input)?;
+        Ok(
+            Attribute::MpUnreachableNlri(
+                MpUnreachableNlri::new(
+                    afi,
+                    safi,
                     prefixes
                 )
             )
