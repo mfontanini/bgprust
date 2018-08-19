@@ -256,20 +256,40 @@ impl AsPath {
     }
 }
 
-/*impl Display for AsPath {
+impl fmt::Display for AsPath {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "({}, {})", self.x, self.y)
+        for (index, segment) in self.segments.iter().enumerate() {
+            write!(f, "{}", segment)?;
+            if index != self.segments.len() - 1 {
+                f.write_str(" ")?;
+            }
+        }
+        Ok(())
     }
 }
 
-impl Display for AsPathSegment {
+impl fmt::Display for AsPathSegment {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut write_vec = |v : &Vec<Asn>, separator, prefix, suffix| {
+            f.write_str(prefix)?;
+            if v.len() > 0 {
+                write!(f, "{}", &v[0])?;
+                for i in &v[1..] {
+                    write!(f, "{}{}", separator, i)?;
+                };
+            }
+            f.write_str(suffix)
+        };
         match self {
-            AsSequence(s) => 
+            AsPathSegment::AsSequence(ref s) | AsPathSegment::ConfedSequence(ref s) => {
+                write_vec(s, " ", "", "")
+            },
+            AsPathSegment::AsSet(ref s) | AsPathSegment::ConfedSet(ref s) => {
+                write_vec(s, ", ", "{ ", " }")
+            }
         }
     }
 }
-*/
 
 // Communities
 
@@ -293,5 +313,68 @@ impl LargeCommunity {
             global_administrator,
             local_data
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_as_path_segment_display() {
+        assert_eq!(
+            AsPathSegment::AsSequence(vec![]).to_string(),
+            ""
+        );
+        assert_eq!(
+            AsPathSegment::AsSet(vec![]).to_string(),
+            "{  }"
+        );
+    }
+
+    #[test]
+    fn as_path_segment_display() {
+        assert_eq!(
+            AsPathSegment::AsSequence(vec![1, 2, 3]).to_string(),
+            "1 2 3"
+        );
+        assert_eq!(
+            AsPathSegment::ConfedSequence(vec![1, 2, 3]).to_string(),
+            "1 2 3"
+        );
+        assert_eq!(
+            AsPathSegment::AsSet(vec![1, 2, 3]).to_string(),
+            "{ 1, 2, 3 }"
+        );
+        assert_eq!(
+            AsPathSegment::ConfedSet(vec![1, 2, 3]).to_string(),
+            "{ 1, 2, 3 }"
+        );
+    }
+
+    #[test]
+    fn as_path_display() {
+        assert_eq!(
+            AsPath::from_segments(vec![
+                AsPathSegment::AsSequence(vec![1, 2, 3]),
+            ]).to_string(),
+            "1 2 3"
+        );
+
+        assert_eq!(
+            AsPath::from_segments(vec![
+                AsPathSegment::AsSequence(vec![1, 2, 3]),
+                AsPathSegment::AsSequence(vec![4, 5]),
+            ]).to_string(),
+            "1 2 3 4 5"
+        );
+
+        assert_eq!(
+            AsPath::from_segments(vec![
+                AsPathSegment::AsSequence(vec![1, 2, 3]),
+                AsPathSegment::AsSet(vec![4, 5]),
+            ]).to_string(),
+            "1 2 3 { 4, 5 }"
+        );
     }
 }
