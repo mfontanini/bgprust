@@ -1,14 +1,13 @@
 use std::cmp;
 use std::mem;
-use std::hash::BuildHasherDefault;
 use std::io;
 use std::io::Read;
 use std::io::BufRead;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use byteorder::{BigEndian, ReadBytesExt};
 
-use ipnetwork::{Ipv4Network, Ipv6Network};
+use ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
 
 use num_traits::FromPrimitive;
 
@@ -90,7 +89,7 @@ impl<T: io::Read> Parser<T> {
         let header = CommonHeader::new(self.input.as_mut().unwrap());
         if let Err(e) = header {
             match e {
-                Error::Io(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+                Error::IoError(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
                 e => Err(e)
             }
         }
@@ -191,12 +190,6 @@ pub enum TableDumpSubtype {
 }
 
 #[derive(Debug)]
-pub enum Afi {
-    Ipv4,
-    Ipv6
-}
-
-#[derive(Debug)]
 pub enum AsLength {
     Bits16,
     Bits32,
@@ -285,6 +278,7 @@ impl MrtParser {
 
 struct AttributeParser {
     attributes: AttributeMap,
+    additional_paths: bool
 }
 
 impl AttributeParser {
@@ -296,9 +290,8 @@ impl AttributeParser {
 
     fn new() -> AttributeParser {
         AttributeParser {
-            attributes: AttributeMap::with_hasher(
-                BuildHasherDefault::<AttributeHasher>::default()
-            )
+            attributes: AttributeMap::default(),
+            additional_paths: false
         }
     }
 
@@ -358,6 +351,7 @@ impl AttributeParser {
             constants::attributes::COMMUNITIES => self.parse_communities(input),
             constants::attributes::ORIGINATOR_ID => self.parse_originator_id(input),
             constants::attributes::CLUSTER_LIST => self.parse_clusters(input),
+            constants::attributes::MP_REACHABLE_NLRI => self.parse_mp_reachable(input),
             constants::attributes::AS4_PATH => self.parse_as4_path(input),
             constants::attributes::AS4_AGGREGATOR => self.parse_as4_aggregator(input),
             constants::attributes::LARGE_COMMUNITIES => self.parse_large_communities(input),
@@ -477,6 +471,85 @@ impl AttributeParser {
         }
         Ok(Attribute::Clusters(clusters))
     }
+
+    fn parse_mp_reachable<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
+        where T: io::BufRead
+    {
+        let afi = input.read_u16::<BigEndian>()?;
+        let safi = input.read_u8()?;
+        let (afi, safi) = (Afi::from_i16(afi as i16), Safi::from_i8(safi as i8));
+        match (&afi, &safi) {
+            (None, _) => {
+                return Err(Error::ParseError("Unknown AFI type".to_string()));
+            },
+            (_, None) => {
+                return Err(Error::ParseError("Unknown SAFI type".to_string()));
+            },
+            _ => ()
+        };
+        let afi = afi.unwrap();
+        let safi = safi.unwrap();
+        let next_hop = self.parse_mp_next_hop(input)?;
+        // Reserved field
+        input.read_u8()?;
+        let prefixes = self.parse_mp_prefix_list(input)?;
+        Ok(
+            Attribute::MpReachableNlri(
+                MpReachableNlri::new(
+                    afi,
+                    safi,
+                    next_hop,
+                    prefixes
+                )
+            )
+        )
+    }
+
+    fn parse_mp_next_hop<T>(&self, input: &mut io::Take<T>) -> Result<NextHopAddress, Error>
+        where T: io::BufRead
+    {
+        let next_hop_length = input.read_u8()?;
+        let output = match next_hop_length {
+            4 => input.read_ipv4_address().map(NextHopAddress::Ipv4)?,
+            16 => input.read_ipv6_address().map(NextHopAddress::Ipv6)?,
+            32 => {
+                NextHopAddress::Ipv6LinkLocal(
+                    input.read_ipv6_address()?,
+                    input.read_ipv6_address()?
+                )
+            },
+            _ => {
+                return Err(Error::ParseError("Invalid next hop length foudn".to_string()));
+            }
+        };
+        Ok(output)
+    }
+
+    fn parse_mp_prefix_list<T>(&self, input: &mut io::Take<T>) -> Result<Vec<NetworkPrefix>, Error>
+        where T: io::BufRead
+    {
+        let mut output = Vec::new();
+        while input.limit() > 0 {
+            let path_id = if self.additional_paths { input.read_u32::<BigEndian>() }
+                          else { Ok(0) }?;
+            // Length in bits
+            let length = input.read_u8()?;
+            // Convert to bytes
+            let length = (length + 7) / 8;
+            // TODO: handle incomplete entries
+            let address = match length {
+                4 => input.read_ipv4_address().map(IpAddr::V4).map_err(Error::IoError),
+                16 => input.read_ipv6_address().map(IpAddr::V6).map_err(Error::IoError),
+                _ => Err(Error::ParseError("Unknown prefix length".to_string())),
+            }?;
+            let prefix = IpNetwork::new(address, length).map_err(|_| {
+                Error::ParseError("Invalid network prefix length".to_string())
+            })?;
+            let prefix = NetworkPrefix::new(prefix, path_id);
+            output.push(prefix);
+        }
+        Ok(output)
+    } 
 
     fn parse_as4_aggregator<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
         where T: io::BufRead

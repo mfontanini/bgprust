@@ -4,7 +4,7 @@ use std::error;
 use std::fmt;
 use std::hash::{Hasher, BuildHasherDefault};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use chrono::prelude::*;
 
@@ -15,26 +15,25 @@ use ipnetwork::IpNetwork;
 use num_traits::FromPrimitive;
 
 use parser::EntryMetadata;
-use parser::Afi;
 use parser::ReadUtils;
 
 #[derive(Debug)]
 pub enum Error {
-    Io(io::Error),
+    IoError(io::Error),
     ParseError(String)
 }
 
 impl error::Error for Error {
     fn description(&self) -> &str {
         match self {
-            Error::Io(e) => e.description(),
+            Error::IoError(e) => e.description(),
             Error::ParseError(s) => &s
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match self {
-            Error::Io(ref e) => Some(e),
+            Error::IoError(ref e) => Some(e),
             _ => None
         }
     }
@@ -48,11 +47,31 @@ impl fmt::Display for Error {
 
 impl convert::From<io::Error> for Error {
     fn from(io_error: io::Error) -> Self {
-        Error::Io(io_error)
+        Error::IoError(io_error)
     }
 }
 
 pub type Asn = u32;
+
+#[derive(Debug, PartialEq, Primitive)]
+pub enum Afi {
+    Ipv4 = 1,
+    Ipv6 = 2
+}
+
+#[derive(Debug, PartialEq, Primitive)]
+pub enum Safi {
+    Unicast = 1,
+    Multicast = 2,
+    UnicastMulticast = 3,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum NextHopAddress {
+    Ipv4(Ipv4Addr),
+    Ipv6(Ipv6Addr),
+    Ipv6LinkLocal(Ipv6Addr, Ipv6Addr),
+}
 
 // Attribute hasher
 
@@ -126,13 +145,28 @@ impl CommonHeader {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct NetworkPrefix {
+    prefix: IpNetwork,
+    path_id: u32
+}
+
+impl NetworkPrefix {
+    pub fn new(prefix: IpNetwork, path_id: u32) -> NetworkPrefix {
+        NetworkPrefix {
+            prefix,
+            path_id
+        }
+    }
+}
+
 // TABLE_DUMP specific
 
 #[derive(Debug)]
 pub struct TableDumpHeader {
     pub view_number: u16,
     pub sequence_number: u16,
-    pub prefix: IpNetwork,
+    pub prefix: NetworkPrefix,
     pub status: u8,
     pub originated_time: DateTime<Utc>,
     pub peer_address: IpAddr,
@@ -159,7 +193,7 @@ impl TableDumpHeader {
             TableDumpHeader {
                 view_number,
                 sequence_number,
-                prefix,
+                prefix: NetworkPrefix::new(prefix, 0 /*path_id*/),
                 status,
                 originated_time: DateTime::from_utc(NaiveDateTime::from_timestamp(time, 0), Utc),
                 peer_address,
@@ -183,6 +217,7 @@ pub mod constants {
         pub const COMMUNITIES: u8 = 8;
         pub const ORIGINATOR_ID: u8 = 9;
         pub const CLUSTER_LIST: u8 = 10;
+        pub const MP_REACHABLE_NLRI: u8 = 14;
         pub const AS4_PATH: u8 = 17;
         pub const AS4_AGGREGATOR: u8 = 18;
         pub const LARGE_COMMUNITIES: u8 = 32;
@@ -202,6 +237,7 @@ pub enum Attribute {
     LargeCommunities(Vec<LargeCommunity>),
     OriginatorId(Ipv4Addr),
     Clusters(Vec<Ipv4Addr>),
+    MpReachableNlri(MpReachableNlri),
     As4Aggregator(Asn, Ipv4Addr),
     As4Path(AsPath),
 }
@@ -315,6 +351,30 @@ impl LargeCommunity {
         }
     }
 }
+
+// NLRI
+
+#[derive(Debug, PartialEq)]
+pub struct MpReachableNlri {
+    afi: Afi,
+    safi: Safi,
+    next_hop: NextHopAddress,
+    prefixes: Vec<NetworkPrefix>,
+}
+
+impl MpReachableNlri {
+    pub fn new(afi: Afi, safi: Safi, next_hop: NextHopAddress,
+               prefixes: Vec<NetworkPrefix>) -> MpReachableNlri {
+        MpReachableNlri {
+            afi,
+            safi,
+            next_hop,
+            prefixes
+        }
+    }
+}
+
+// Tests
 
 #[cfg(test)]
 mod tests {
