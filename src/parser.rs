@@ -189,7 +189,7 @@ pub enum TableDumpSubtype {
     Ipv6As4 = 4,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum AsLength {
     Bits16,
     Bits32,
@@ -288,6 +288,8 @@ impl AttributeParser {
     const AS_PATH_CONFED_SEQUENCE: u8 = 3;
     const AS_PATH_CONFED_SET: u8 = 4;
 
+    const AS_TRANS : u32 = 23456;
+
     fn new() -> AttributeParser {
         AttributeParser {
             attributes: AttributeMap::default(),
@@ -334,6 +336,7 @@ impl AttributeParser {
             // Restore the wrapped buffer
             input = attr_input.into_inner();
         }
+        self.handle_as4_transition(&metadata);
         Ok(self.attributes)
     }
 
@@ -361,6 +364,43 @@ impl AttributeParser {
             }
         };
         attribute.map(Some)
+    }
+
+    fn handle_as4_transition(&mut self, metadata: &EntryMetadata) {
+        if metadata.as_length == AsLength::Bits32 {
+            return;
+        }
+        // Merge AS and AS4 paths
+        let as4_path = self.attributes.remove(&constants::attributes::AS4_PATH);
+        // If we get a new AS path then we must have got the AS path. This is otherwise bogus
+        // and we shouldn't try to even recover from it
+        if let Some(Attribute::As4Path(new_path)) = as4_path {
+            self.attributes.entry(constants::attributes::AS_PATH).and_modify(|attr| {
+                *attr = match attr {
+                    Attribute::AsPath(path) => {
+                        Attribute::AsPath(
+                            AttributeParser::merge_as_paths(&path, &new_path)
+                        )
+                    },
+                    _ => panic!("Found unexpected non AS path attribute"),
+                };
+            });
+        }
+
+        // Handle aggregator/new aggregator
+        let as4_aggregator = self.attributes.remove(&constants::attributes::AS4_AGGREGATOR);
+        if let Some(Attribute::As4Aggregator(as4_asn, as4_addr)) = as4_aggregator {
+            // Fetch and replace only if we have AS_TRANS as the current aggregator ASN
+            self.attributes.entry(constants::attributes::AS4_AGGREGATOR).and_modify(|attr| {
+                *attr = match attr { 
+                    Attribute::Aggregator(AttributeParser::AS_TRANS, _) => {
+                        Attribute::Aggregator(as4_asn, as4_addr)
+                    },
+                    Attribute::Aggregator(asn, addr) => Attribute::Aggregator(*asn, *addr),
+                    _ => panic!("Found unexpected non aggregator attribute")
+                };
+            });
+        }
     }
 
     fn parse_origin<T>(&self, input: &mut io::Take<T>) -> Result<Attribute, Error>
@@ -604,7 +644,7 @@ impl AttributeParser {
         Ok(Attribute::LargeCommunities(communities))
     }
 
-    fn merge_as_paths(&self, current_path: &AsPath, as4_path: &AsPath) -> AsPath {
+    fn merge_as_paths(current_path: &AsPath, as4_path: &AsPath) -> AsPath {
         let current_count = current_path.count_asns();
         let as4_path_count = as4_path.count_asns();
         if current_count <= as4_path_count {
@@ -703,7 +743,6 @@ mod tests {
                 AsPathSegment::AsSequence(vec![2, 999999]),
             ]
         );
-        let parser = AttributeParser::new();
         assert_eq!(
             AsPath::from_segments(
                 vec![
@@ -711,7 +750,7 @@ mod tests {
                     AsPathSegment::AsSequence(vec![2, 999999])
                 ]
             ),
-            parser.merge_as_paths(&current_path, &as4_path)
+            AttributeParser::merge_as_paths(&current_path, &as4_path)
         );
     }
 
@@ -729,7 +768,6 @@ mod tests {
                 AsPathSegment::AsSet(vec![3, 999999])
             ]
         );
-        let parser = AttributeParser::new();
         assert_eq!(
             AsPath::from_segments(
                 vec![
@@ -738,7 +776,7 @@ mod tests {
                     AsPathSegment::AsSet(vec![3, 999999]),
                 ]
             ),
-            parser.merge_as_paths(&current_path, &as4_path)
+            AttributeParser::merge_as_paths(&current_path, &as4_path)
         );
     }
 
@@ -750,10 +788,9 @@ mod tests {
                 AsPathSegment::AsSequence(vec![2])
             ]
         );
-        let parser = AttributeParser::new();
         assert_eq!(
             current_path,
-            parser.merge_as_paths(&current_path, &as4_path)
+            AttributeParser::merge_as_paths(&current_path, &as4_path)
         );
     }
 
